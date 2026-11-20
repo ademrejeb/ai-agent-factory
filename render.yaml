@@ -1,0 +1,39 @@
+###############################################################################
+# Render Blueprint — Agent Factory API.
+#   https://dashboard.render.com/blueprint/new?repo=https://github.com/ademrejeb/ai-agent-factory
+#
+# Values marked `sync: false` are prompted for in the dashboard.
+# DATABASE_URL format: postgresql+psycopg://USER:PASS@HOST/DB?sslmode=require
+# The production config guard refuses to boot without JWT_SECRET (32+ chars),
+# a valid Fernet PLATFORM_SECRETS_KEY, HTTPS API_PUBLIC_URL/WEB_ORIGIN, and
+# COOKIE_SECURE=true.
+###############################################################################
+
+services:
+  - type: web
+    name: agent-factory-api
+    runtime: docker
+    region: frankfurt
+    plan: free
+    dockerContext: .
+    dockerfilePath: ./infrastructure/docker/api.Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: PLATFORM_SECRETS_KEY
+        sync: false
+      - key: API_PUBLIC_URL
+        sync: false
+      - key: WEB_ORIGIN
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
