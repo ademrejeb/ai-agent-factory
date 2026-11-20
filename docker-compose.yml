@@ -1,0 +1,76 @@
+name: ai-agent-factory
+
+# The platform runs its own LangGraph runtime against an OpenAI-compatible
+# endpoint. Ollama is expected to run on the host (or your own Compose file);
+# set ALLOW_PRIVATE_PROVIDER_URLS=true when the API must reach it.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-factory}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-factory}
+      POSTGRES_DB: ${POSTGRES_DB:-factory}
+    ports:
+      - "5433:5432"
+    volumes:
+      - factory_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-factory} -d ${POSTGRES_DB:-factory}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      API_HOST: 0.0.0.0
+      API_PORT: "8080"
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-factory}:${POSTGRES_PASSWORD:-factory}@postgres:5432/${POSTGRES_DB:-factory}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/web.Dockerfile
+      args:
+        API_ORIGIN: http://api:8080
+        NEXT_PUBLIC_PLATFORM_NAME: ${PLATFORM_NAME:-AI Agent Factory}
+    environment:
+      PORT: "3100"
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+volumes:
+  factory_pgdata:
