@@ -26,6 +26,7 @@ from app.schemas import (
 from app.services.knowledge import (
     format_context,
     ingest_text,
+    reembed_base,
     search_base,
     slugify,
 )
@@ -214,6 +215,7 @@ def update_base(
     body: KnowledgeBaseUpdate,
     ctx: AuthContext = Depends(auth_context),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     if ctx.role not in {"owner", "admin"}:
         raise AppError("forbidden", "Only owners and admins can edit knowledge bases.", 403)
@@ -237,6 +239,7 @@ def update_base(
         base.slug = _unique_slug(db, ctx.organization.id, base.name, exclude_id=base.id)
     if body.description is not None:
         base.description = body.description
+    previous = (base.mode, base.embedding_connection_id, base.embedding_model)
     base.mode = mode
     base.embedding_connection_id = connection_id
     base.embedding_model = model
@@ -245,6 +248,12 @@ def update_base(
     if body.chunk_overlap is not None:
         base.chunk_overlap = body.chunk_overlap
     base.updated_at = datetime.now(UTC)
+    if base.mode == "vector" and previous != (base.mode, base.embedding_connection_id, base.embedding_model):
+        try:
+            reembed_base(db, settings, base)
+        except AppError:
+            db.rollback()
+            raise
     _audit(db, ctx, "knowledge_base.update", resource_id=base.id, metadata={"name": base.name})
     db.commit()
     db.refresh(base)

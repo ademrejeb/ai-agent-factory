@@ -67,6 +67,9 @@ class AgentCreate(BaseModel):
     description: str = ""
     purpose: str = ""
     tags: list[str] = Field(default_factory=list)
+    # Optional: create a ready-to-run LangGraph agent instead of an empty record.
+    provider_connection_id: str | None = None
+    model: str | None = Field(default=None, max_length=200)
 
 
 class AgentLinkRequest(BaseModel):

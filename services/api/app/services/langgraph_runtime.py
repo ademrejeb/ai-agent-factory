@@ -159,6 +159,7 @@ class LangGraphRuntime:
         skills: dict[str, dict[str, Any]] | None = None,
         default_skill_ids: list[str] | None = None,
         tool_runner: Callable[[str, dict[str, Any]], Any] | None = None,
+        retrieval: Callable[[str, str, int, float | None], dict[str, Any]] | None = None,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -176,6 +177,7 @@ class LangGraphRuntime:
         self._skills = dict(skills or {})
         self._default_skill_ids = list(default_skill_ids or [])
         self._tool_runner = tool_runner
+        self._retrieval = retrieval
         self._trace: list[dict[str, Any]] = []
         # An injected client is an intentional test/replay seam. Skip DNS
         # validation there so tests stay hermetic; production has no client.
@@ -217,6 +219,56 @@ class LangGraphRuntime:
             return self._http_client, False
         return httpx.Client(timeout=timeout), True
 
+    # -- context engineering ------------------------------------------
+    def _history_messages(
+        self, values: dict[str, Any], context: dict[str, Any]
+    ) -> list[Any]:
+        if not context.get("history"):
+            return []
+        path = str(context.get("history_path") or "history")
+        raw = resolve_path(values, path)
+        if not isinstance(raw, list):
+            return []
+        limit = int(context.get("max_history_messages") or 0)
+        rows = raw[-limit:] if limit > 0 else []
+        messages: list[Any] = []
+        for row in rows:
+            role = "user"
+            content: Any = row
+            if isinstance(row, dict):
+                role = str(row.get("role") or "user").lower()
+                content = row.get("content")
+            elif isinstance(row, (list, tuple)) and len(row) == 2:
+                role = str(row[0]).lower()
+                content = row[1]
+            text = _content_text(content).strip()
+            if not text:
+                continue
+            if role in {"assistant", "ai", "agent"}:
+                messages.append(AIMessage(content=text))
+            elif role == "system":
+                messages.append(SystemMessage(content=text))
+            else:
+                messages.append(HumanMessage(content=text))
+        return messages
+
+    @staticmethod
+    def _trim_context(
+        system: str,
+        history: list[Any],
+        prompt: str,
+        max_chars: int,
+    ) -> tuple[str, list[Any]]:
+        """Keep the newest history first; never silently drop the user prompt."""
+        budget = max(500, int(max_chars))
+        total = len(system) + len(prompt) + sum(len(str(m.content)) for m in history)
+        while history and total > budget:
+            total -= len(str(history.pop(0).content))
+        if total > budget and system:
+            keep = max(0, budget - len(prompt))
+            system = system[:keep]
+        return system, history
+
     # -- node implementations ----------------------------------------
     def _input_node(self, config: dict[str, Any], raw_inputs: dict[str, Any]):
         def run(state: GraphState) -> dict[str, Any]:
@@ -247,10 +299,18 @@ class LangGraphRuntime:
             max_tokens = node_config.get("max_tokens")
             if max_tokens is None:
                 max_tokens = self.default_max_tokens
+            context = node_config.get("context") or {}
+            history = self._history_messages(values, context)
+            system, history = self._trim_context(
+                system, history, prompt, int(context.get("max_context_chars") or 8000)
+            )
             model = self._build_model(model_name, temperature, max_tokens)
+            if node_config.get("response_format") == "json_object":
+                model = model.bind(response_format={"type": "json_object"})
             messages: list[Any] = []
             if system:
                 messages.append(SystemMessage(content=system))
+            messages.extend(history)
             messages.append(HumanMessage(content=prompt))
             response = model.invoke(messages, config=config)
             text = _content_text(getattr(response, "content", response))
@@ -469,9 +529,15 @@ class LangGraphRuntime:
             model = self._build_model(model_name, temperature, max_tokens)
             if specs:
                 model = model.bind_tools(specs)
+            context = node_config.get("context") or {}
+            history = self._history_messages(values, context)
+            system, history = self._trim_context(
+                system, history, prompt, int(context.get("max_context_chars") or 8000)
+            )
             messages: list[Any] = []
             if system:
                 messages.append(SystemMessage(content=system))
+            messages.extend(history)
             messages.append(HumanMessage(content=prompt))
             steps: list[dict[str, Any]] = []
             tokens = 0
@@ -558,6 +624,67 @@ class LangGraphRuntime:
                         "type": "guardrail",
                         "passed": decision["passed"],
                         "reasons": decision["reasons"],
+                    }
+                ],
+            }
+
+        return run
+
+    def _retrieval_node(self, node_id: str, config: dict[str, Any]):
+        def run(state: GraphState) -> dict[str, Any]:
+            values = state.get("values") or {}
+            query = render_template(str(config.get("query") or ""), values).strip()
+            if not query:
+                raise GraphRuntimeError(
+                    f"Retrieval node '{node_id}' produced an empty query.", node_id=node_id
+                )
+            if self._retrieval is None:
+                raise GraphRuntimeError(
+                    "Knowledge retrieval is not configured for this runtime.", node_id=node_id
+                )
+            top_k = int(config.get("top_k") or 5)
+            min_score = config.get("min_score")
+            try:
+                result = self._retrieval(
+                    str(config.get("knowledge_base_id") or ""),
+                    query,
+                    top_k,
+                    float(min_score) if isinstance(min_score, (int, float)) else None,
+                )
+            except AppError as exc:
+                raise GraphRuntimeError(exc.message, node_id=node_id) from exc
+            rows = result.get("results") if isinstance(result, dict) else None
+            rows = rows if isinstance(rows, list) else []
+            blocks = []
+            for index, row in enumerate(rows, start=1):
+                if not isinstance(row, dict):
+                    continue
+                blocks.append(
+                    f"[{index}] {row.get('document_name', 'document')} "
+                    f"(relevance {float(row.get('score') or 0):.2f})\n{row.get('content', '')}"
+                )
+            context = "\n\n".join(blocks)
+            output_key = config.get("output_key") or node_id
+            return {
+                "values": {
+                    output_key: context,
+                    f"{output_key}_results": rows,
+                    f"{output_key}_query": query,
+                },
+                "steps": [
+                    {
+                        "node": node_id,
+                        "type": "retrieval",
+                        "knowledge_base_id": config.get("knowledge_base_id"),
+                        "query": query,
+                        "top_k": top_k,
+                        "mode": result.get("mode") if isinstance(result, dict) else None,
+                        "chunks": len(rows),
+                        "scores": [
+                            round(float(row.get("score") or 0), 3)
+                            for row in rows
+                            if isinstance(row, dict)
+                        ],
                     }
                 ],
             }
@@ -685,6 +812,8 @@ class LangGraphRuntime:
                 builder.add_node(node_id, self._traced(self._agent_node(node_id, config)))
             elif kind == "guardrail":
                 builder.add_node(node_id, self._traced(self._guardrail_node(node_id, config)))
+            elif kind == "retrieval":
+                builder.add_node(node_id, self._traced(self._retrieval_node(node_id, config)))
             else:
                 builder.add_node(node_id, self._traced(self._output_node(node_id, config)))
 

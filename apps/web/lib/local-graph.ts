@@ -17,6 +17,7 @@ export type LocalNodeType =
   | "tool"
   | "agent"
   | "guardrail"
+  | "retrieval"
   | "output";
 
 export type RouteHandle = "true" | "false" | "pass" | "fail";
@@ -110,6 +111,7 @@ export const NODE_ORDER: LocalNodeType[] = [
   "llm",
   "tool",
   "http",
+  "retrieval",
   "guardrail",
   "condition",
   "output",
@@ -146,6 +148,13 @@ export const NODE_META: Record<LocalNodeType, NodeMeta> = {
     description: "Calls any URL directly. Prefer a registered tool when it is reusable.",
     icon: "plug",
     tone: "http",
+  },
+  retrieval: {
+    label: "Knowledge",
+    description:
+      "Searches a knowledge base and returns the most relevant chunks. Put it before an LLM or agent node to ground answers.",
+    icon: "database",
+    tone: "retrieval",
   },
   guardrail: {
     label: "Guardrail",
@@ -217,6 +226,7 @@ const ID_BASE: Record<LocalNodeType, string> = {
   llm: "llm",
   tool: "tool",
   http: "http",
+  retrieval: "retrieval",
   guardrail: "guardrail",
   condition: "condition",
   output: "output",
@@ -267,6 +277,12 @@ function defaultConfig(type: LocalNodeType, id: string): Record<string, unknown>
       max_steps: 6,
       tool_ids: [],
       skill_ids: [],
+      context: {
+        history: false,
+        history_path: "history",
+        max_history_messages: 6,
+        max_context_chars: 8000,
+      },
       output_key: id,
     };
   }
@@ -277,6 +293,13 @@ function defaultConfig(type: LocalNodeType, id: string): Record<string, unknown>
       model: null,
       temperature: null,
       max_tokens: null,
+      context: {
+        history: false,
+        history_path: "history",
+        max_history_messages: 6,
+        max_context_chars: 8000,
+      },
+      response_format: "text",
       output_key: id,
     };
   }
@@ -287,9 +310,19 @@ function defaultConfig(type: LocalNodeType, id: string): Record<string, unknown>
       output_key: id,
     };
   }
+  if (type === "retrieval") {
+    return {
+      knowledge_base_id: "",
+      query: "{{ message }}",
+      top_k: 5,
+      min_score: null,
+      output_key: id,
+    };
+  }
   if (type === "guardrail") {
     return {
       path: "message",
+      preset: "",
       max_chars: 4000,
       min_chars: null,
       deny_terms: [],
@@ -440,11 +473,19 @@ export function nodeSummary(node: LocalNode): string {
     const toolId = typeof config.tool_id === "string" && config.tool_id ? config.tool_id : "No tool selected";
     return `Tool: ${toolId}`;
   }
+  if (node.type === "retrieval") {
+    const base = typeof config.knowledge_base_id === "string" && config.knowledge_base_id
+      ? config.knowledge_base_id
+      : "No knowledge base";
+    const topK = typeof config.top_k === "number" ? config.top_k : 5;
+    return `${base} · top ${topK} chunks`;
+  }
   if (node.type === "guardrail") {
     const path = typeof config.path === "string" ? config.path : "value";
+    const preset = typeof config.preset === "string" ? config.preset : "";
     const deny = Array.isArray(config.deny_terms) ? config.deny_terms.length : 0;
     const require = Array.isArray(config.require_terms) ? config.require_terms.length : 0;
-    return `${path} · ${deny} blocked · ${require} required`;
+    return `${path} · ${preset ? `${preset.replace(/_/g, " ")} · ` : ""}${deny} blocked · ${require} required`;
   }
   if (node.type === "llm") {
     const model = typeof config.model === "string" && config.model ? config.model : "connection default";

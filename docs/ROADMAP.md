@@ -11,7 +11,11 @@ Nothing is claimed complete without a test or a verified run.
 - **Tools and MCP:** organization-owned HTTP/MCP tools, encrypted headers, MCP discovery,
   agent tool-calling loop, per-tool test path.
 - **Skills:** reusable instruction blocks attached to agents and nodes.
-- **Guardrails:** pass/fail routing with visible reasons and a mandatory fail output.
+- **Guardrails:** pass/fail routing with visible reasons and a mandatory fail output;
+  presets for PII, prompt injection and JSON objects.
+- **RAG:** knowledge bases with text ingestion, chunking, keyword or embedding
+  search, a retrieval node, and a one-click knowledge-assistant template.
+- **Context:** per-node history window and character budget; JSON response mode.
 - **Local models:** Ollama quick preset, live `GET /models`, model listing in the UI.
 - **Tenants:** active-tenant cookie, in-app switching, membership enforcement.
 - **SSO:** in-app OIDC authorization-code flow with PKCE and token validation.

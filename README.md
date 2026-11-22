@@ -17,11 +17,14 @@ No screen claims a capability this repository does not implement.
 | Organizations, memberships, active-tenant switching, roles | Implemented |
 | OpenAI-compatible model connections (Ollama, LM Studio, vLLM, OpenAI) | Implemented |
 | Live `GET /models` verification and model discovery | Implemented |
-| Visual graph editor: input, agent, LLM, tool, HTTP, guardrail, condition, output | Implemented |
+| Visual graph editor: input, agent, LLM, tool, HTTP, knowledge, guardrail, condition, output | Implemented |
 | Bounded tool-calling agent loop with real tools | Implemented |
 | Reusable HTTP tools and MCP server tools, encrypted headers | Implemented |
 | Reusable skills appended to agent instructions | Implemented |
-| Guardrails with pass/fail branches and visible reasons | Implemented |
+| Knowledge bases (RAG): text ingestion, chunking, lexical or embedding search | Implemented |
+| Retrieval node with scored chunks and a context budget | Implemented |
+| Guardrail presets (PII, prompt injection, JSON object) with explicit reasons | Implemented |
+| Context engineering: history window, character budget, JSON output | Implemented |
 | Ticketing dispatcher template with a real guardrail | Implemented |
 | Lifecycle: draft → configured → tested → validated → published → monitored | Implemented |
 | Blocking and SSE streaming execution; disconnect becomes `cancelled` | Implemented |
@@ -100,6 +103,23 @@ In the UI: **Model providers → Use local Ollama**. Base URL
 **List models** to verify what the endpoint really has. The same path works for
 LM Studio, vLLM, LiteLLM, OpenAI, or a compatible gateway.
 
+## Knowledge (RAG)
+
+Create a knowledge base in **Knowledge**, add text/Markdown/CSV/JSON documents,
+and test retrieval before wiring it into a graph. Two modes:
+
+- **Keyword** works with no extra service; it scores chunks by term coverage.
+- **Embeddings** calls the selected connection's OpenAI-compatible
+  `POST /embeddings` (Ollama, LM Studio, vLLM, OpenAI) and stores vectors as
+  JSON. Search ranks by cosine similarity in-process, so it works on every
+  managed Postgres without the `pgvector` extension.
+
+A **Knowledge** node in the graph turns the user question into the top chunks
+and writes two values: the formatted context and `<key>_results` with scores.
+The RAG assistant template creates input → knowledge → grounded answer → output
+in one step. Documents are capped per run by `KNOWLEDGE_MAX_CHUNKS_PER_RUN`
+(default 5000); this is a policy/FAQ corpus, not a general search engine.
+
 ## Tools, MCP, skills, guardrails
 
 - **Tools** are organization-owned. HTTP tools store method/URL/body; MCP tools
@@ -109,17 +129,23 @@ LM Studio, vLLM, LiteLLM, OpenAI, or a compatible gateway.
   tools in a bounded loop (`max_steps`, capped at 12) and returns a final answer.
 - **Skills** are reusable instruction blocks appended to every agent node that
   uses them.
-- **Guardrails** inspect a rendered value (length, blocked/required terms,
-  regex) and route `pass` or `fail`. Both branches must end at an output, so a
-  rejected answer stays visible in the run.
+- **Guardrails** inspect a rendered value and route `pass` or `fail`. Presets
+  cover PII (email/phone/card), prompt-injection phrases and valid JSON
+  objects; custom length, blocked/required term and regex rules still apply.
+  Both branches must end at an output, so a rejected answer stays visible in
+  the run with the exact reasons.
+- **Context** on LLM/agent nodes controls conversation history
+  (`history_path`, last N messages) and a character budget that trims the
+  oldest history before the current prompt. `response_format: json_object`
+  asks OpenAI-compatible models for a JSON object.
 
 MCP transport is JSON-RPC over HTTP (`tools/list` and `tools/call`). The Tools
 page can discover a server's tools before you save one.
 
 ## Graph model
 
-Exactly one `input`; any mix of `agent`, `llm`, `tool`, `http`, `condition`,
-`guardrail`; one or more terminal `output`. Graphs are acyclic and never merge.
+Exactly one `input`; any mix of `agent`, `llm`, `tool`, `http`, `retrieval`,
+`condition`, `guardrail`; one or more terminal `output`. Graphs are acyclic and never merge.
 A condition has `true`/`false`; a guardrail has `pass`/`fail`.
 
 ```text

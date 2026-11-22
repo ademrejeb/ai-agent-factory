@@ -35,6 +35,11 @@ SSO configuration: `SSO_ISSUER`, `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET`,
 | POST | `/api/v1/tools/discover/mcp` | `tools/list` against an MCP server |
 | GET/POST | `/api/v1/skills` | List/create reusable instructions |
 | PATCH/DELETE | `/api/v1/skills/{id}` | Update/delete a skill |
+| GET/POST | `/api/v1/knowledge-bases` | List/create RAG corpora |
+| GET/PATCH/DELETE | `/api/v1/knowledge-bases/{id}` | Detail (with documents)/update/delete |
+| POST | `/api/v1/knowledge-bases/{id}/documents` | Chunk + index text |
+| DELETE | `/api/v1/knowledge-bases/{id}/documents/{doc_id}` | Remove a document and its chunks |
+| POST | `/api/v1/knowledge-bases/{id}/search` | Same retrieval path as the graph node; returns scored chunks |
 
 Tool headers are encrypted at rest; `{{secrets.NAME}}` resolves from agent secrets
 at execution time. MCP uses Streamable HTTP JSON-RPC (`initialize`,
@@ -47,7 +52,7 @@ at execution time. MCP uses Streamable HTTP JSON-RPC (`initialize`,
 | GET/POST | `/api/v1/agents` | Catalog/create |
 | PATCH | `/api/v1/agents/{id}` | Metadata, tags, `skill_ids` |
 | POST | `/api/v1/agents/{id}/link` | Verify and link a model connection |
-| POST | `/api/v1/agents/from-template` | Create the ticketing dispatcher graph |
+| POST | `/api/v1/agents/from-template` | Create the ticketing dispatcher or RAG assistant graph |
 | POST | `/api/v1/agents/{id}/test` | Blocking execution, recorded |
 | POST | `/api/v1/agents/{id}/test/stream` | SSE: chunk/status/final/error |
 | POST | `/api/v1/agents/{id}/test/async` | Returns `unsupported_capability` (no queue) |

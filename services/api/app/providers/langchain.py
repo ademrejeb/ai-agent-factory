@@ -184,6 +184,7 @@ class LangChainProvider:
                 request.max_http_response_bytes if request else 2_000_000
             ),
             settings=request.settings if request else None,
+            retrieval=request.retrieval if request else None,
         )
 
     def _graph(self, request: ExecutionRequest) -> dict[str, Any]:

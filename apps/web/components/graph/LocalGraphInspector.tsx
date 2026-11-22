@@ -18,7 +18,7 @@ import {
   type InputFieldType,
   type LocalNode,
 } from "@/lib/local-graph";
-import type { ListResponse, Skill, Tool } from "@/lib/types";
+import type { KnowledgeBase, ListResponse, Skill, Tool } from "@/lib/types";
 
 interface LocalGraphInspectorProps {
   node: LocalNode | null;
@@ -170,6 +170,13 @@ function InspectorBody({
             />
           ) : node.type === "tool" ? (
             <ToolNodeEditor config={node.config} readOnly={readOnly} onChange={updateConfig} />
+          ) : node.type === "retrieval" ? (
+            <RetrievalNodeEditor
+              config={node.config}
+              readOnly={readOnly}
+              availableValues={availableValues}
+              onChange={updateConfig}
+            />
           ) : node.type === "guardrail" ? (
             <GuardrailNodeEditor config={node.config} readOnly={readOnly} onChange={updateConfig} />
           ) : node.type === "http" ? (
@@ -539,6 +546,8 @@ function AgentNodeEditor({
         />
         <p className="field-hint">A hard stop. The loop cannot run longer than this, so cost stays bounded.</p>
       </div>
+      <ContextEditor config={config} readOnly={readOnly} onChange={onChange} />
+
       <div className="wf-field">
         <span className="field-label">Tools</span>
         {toolsApi.data?.items.length ? (
@@ -659,6 +668,25 @@ function GuardrailNodeEditor({ config, readOnly, onChange }: EditorProps) {
         </div>
       </div>
       <div className="wf-field">
+        <label className="field-label" htmlFor="graph-guardrail-preset">Preset</label>
+        <Select
+          id="graph-guardrail-preset"
+          value={typeof config.preset === "string" ? config.preset : ""}
+          disabled={readOnly}
+          onChange={(event) => onChange({ preset: event.target.value })}
+        >
+          <option value="">Custom rules only</option>
+          <option value="pii">Block personal data (email, phone, card)</option>
+          <option value="prompt_injection">Block prompt-injection phrases</option>
+          <option value="json_object">Require a valid JSON object</option>
+          <option value="safe_text">Safe text (custom terms only)</option>
+        </Select>
+        <p className="field-hint">
+          Presets run before the term and pattern rules below. Every failure reason is shown
+          in the run timeline.
+        </p>
+      </div>
+      <div className="wf-field">
         <label className="field-label" htmlFor="graph-guardrail-path">Value path <span className="field-required">*</span></label>
         <Input
           id="graph-guardrail-path"
@@ -759,6 +787,200 @@ function GuardrailNodeEditor({ config, readOnly, onChange }: EditorProps) {
   );
 }
 
+function ContextEditor({
+  config,
+  readOnly,
+  onChange,
+}: EditorProps) {
+  const context = (config.context && typeof config.context === "object"
+    ? config.context
+    : {}) as Record<string, unknown>;
+  function update(patch: Record<string, unknown>) {
+    onChange({ context: { ...context, ...patch } });
+  }
+  const history = Boolean(context.history);
+  return (
+    <div className="wf-field">
+      <span className="field-label">Context &amp; memory</span>
+      <div className="wf-callout wf-callout-compact">
+        <span className="wf-callout-icon"><Icon name="layers" size={14} /></span>
+        <p>
+          History lets a chat agent remember earlier turns. The character budget trims the
+          oldest history first, never the current prompt.
+        </p>
+      </div>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={history}
+          disabled={readOnly}
+          onChange={(event) => update({ history: event.target.checked })}
+        />
+        <span>Include conversation history</span>
+      </label>
+      {history ? (
+        <div className="wf-two-col">
+          <div className="wf-field">
+            <label className="field-label" htmlFor={`history-path-${String(config.output_key ?? "node")}`}>
+              History value path
+            </label>
+            <Input
+              id={`history-path-${String(config.output_key ?? "node")}`}
+              value={String(context.history_path ?? "history")}
+              disabled={readOnly}
+              placeholder="history"
+              onChange={(event) => update({ history_path: event.target.value })}
+            />
+            <p className="field-hint">A list of {"{role, content}"} objects in the input.</p>
+          </div>
+          <div className="wf-field">
+            <label className="field-label" htmlFor={`history-turns-${String(config.output_key ?? "node")}`}>
+              Last messages
+            </label>
+            <Input
+              id={`history-turns-${String(config.output_key ?? "node")}`}
+              type="number"
+              min={0}
+              max={50}
+              value={Number(context.max_history_messages ?? 6)}
+              disabled={readOnly}
+              onChange={(event) => update({ max_history_messages: Number(event.target.value) })}
+            />
+          </div>
+        </div>
+      ) : null}
+      <div className="wf-field">
+        <label className="field-label" htmlFor={`context-budget-${String(config.output_key ?? "node")}`}>
+          Context character budget
+        </label>
+        <Input
+          id={`context-budget-${String(config.output_key ?? "node")}`}
+          type="number"
+          min={500}
+          max={50000}
+          step={500}
+          value={Number(context.max_context_chars ?? 8000)}
+          disabled={readOnly}
+          onChange={(event) => update({ max_context_chars: Number(event.target.value) })}
+        />
+        <p className="field-hint">System + history + prompt are trimmed to this size.</p>
+      </div>
+    </div>
+  );
+}
+
+function RetrievalNodeEditor({
+  config,
+  readOnly,
+  availableValues,
+  onChange,
+}: EditorProps & { availableValues: string[] }) {
+  const bases = useApi<ListResponse<KnowledgeBase>>("/api/v1/knowledge-bases");
+  const topK = typeof config.top_k === "number" ? config.top_k : 5;
+  const minScore = typeof config.min_score === "number" ? config.min_score : "";
+  return (
+    <div className="stack">
+      <div className="wf-callout">
+        <span className="wf-callout-icon"><Icon name="database" size={15} /></span>
+        <div>
+          <strong>Ground the answer in your documents</strong>
+          <p>
+            The node embeds the question, ranks the knowledge base chunks and writes the
+            best ones to an output key. Pass that key to an LLM prompt as context.
+          </p>
+        </div>
+      </div>
+      <div className="wf-field">
+        <label className="field-label" htmlFor="graph-retrieval-base">
+          Knowledge base <span className="field-required">*</span>
+        </label>
+        <Select
+          id="graph-retrieval-base"
+          value={typeof config.knowledge_base_id === "string" ? config.knowledge_base_id : ""}
+          disabled={readOnly}
+          onChange={(event) => onChange({ knowledge_base_id: event.target.value })}
+        >
+          <option value="">Select a knowledge base…</option>
+          {(bases.data?.items ?? []).map((base) => (
+            <option key={base.id} value={base.id}>
+              {base.name} ({base.mode}, {base.document_count} docs)
+            </option>
+          ))}
+        </Select>
+        {bases.data?.items.length === 0 ? (
+          <p className="field-hint">
+            No knowledge bases yet. Create one in <span className="mono">Knowledge</span>, then
+            return here.
+          </p>
+        ) : null}
+      </div>
+      <div className="wf-field">
+        <label className="field-label" htmlFor="graph-retrieval-query">
+          Query template <span className="field-required">*</span>
+        </label>
+        <Input
+          id="graph-retrieval-query"
+          value={typeof config.query === "string" ? config.query : ""}
+          disabled={readOnly}
+          placeholder="{{ question }}"
+          onChange={(event) => onChange({ query: event.target.value })}
+        />
+        <p className="field-hint">Usually the user question from the input node.</p>
+        <ValueTokens values={availableValues} />
+      </div>
+      <div className="wf-two-col">
+        <div className="wf-field">
+          <label className="field-label" htmlFor="graph-retrieval-topk">
+            Chunks to return
+          </label>
+          <Input
+            id="graph-retrieval-topk"
+            type="number"
+            min={1}
+            max={20}
+            value={topK}
+            disabled={readOnly}
+            onChange={(event) => onChange({ top_k: Number(event.target.value) })}
+          />
+        </div>
+        <div className="wf-field">
+          <label className="field-label" htmlFor="graph-retrieval-min">
+            Minimum relevance
+          </label>
+          <Input
+            id="graph-retrieval-min"
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={minScore}
+            disabled={readOnly}
+            placeholder="No minimum"
+            onChange={(event) =>
+              onChange({ min_score: event.target.value === "" ? null : Number(event.target.value) })
+            }
+          />
+        </div>
+      </div>
+      <div className="wf-field">
+        <label className="field-label" htmlFor="graph-retrieval-output">
+          Output key
+        </label>
+        <Input
+          id="graph-retrieval-output"
+          value={typeof config.output_key === "string" ? config.output_key : ""}
+          disabled={readOnly}
+          onChange={(event) => onChange({ output_key: event.target.value })}
+        />
+        <p className="field-hint">
+          The context string. A <span className="mono">_results</span> key also carries the
+          scored chunks.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function LlmNodeEditor({
   config,
   readOnly,
@@ -801,6 +1023,8 @@ function LlmNodeEditor({
           onChange={(event) => onChange({ system: event.target.value })}
         />
       </div>
+
+      <ContextEditor config={config} readOnly={readOnly} onChange={onChange} />
 
       <div className="wf-field">
         <label className="field-label" htmlFor="graph-llm-model">

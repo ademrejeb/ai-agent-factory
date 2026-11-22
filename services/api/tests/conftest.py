@@ -7,14 +7,17 @@ os.environ["PLATFORM_SECRETS_KEY"] = Fernet.generate_key().decode()
 os.environ["JWT_SECRET"] = "test-jwt-secret-which-is-long-enough-123456"
 os.environ["APP_ENV"] = "test"
 os.environ["WEB_ORIGIN"] = "http://localhost:3100"
+# Keep the suite independent of a developer's .env: SSO is opt-in.
+for _key in ("SSO_ISSUER", "SSO_CLIENT_ID", "SSO_CLIENT_SECRET"):
+    os.environ[_key] = ""
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import event
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 
-from app.db import engine
-from app.main import app
-from app.models import Base
+from app.db import engine  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import Base  # noqa: E402
 
 
 @event.listens_for(engine, "connect")

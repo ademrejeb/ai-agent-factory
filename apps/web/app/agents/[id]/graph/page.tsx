@@ -53,6 +53,7 @@ function nodeCounts(nodes: Record<string, LocalNode>): Record<LocalNodeType, num
     llm: 0,
     tool: 0,
     http: 0,
+    retrieval: 0,
     guardrail: 0,
     condition: 0,
     output: 0,

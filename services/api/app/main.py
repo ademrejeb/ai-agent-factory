@@ -21,6 +21,7 @@ from app.routers import (
     credentials,
     gateway,
     health,
+    knowledge,
     overview,
     provider_catalog,
     providers,

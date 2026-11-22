@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 interface CardProps {
+  id?: string;
   title?: string;
   description?: string;
   actions?: ReactNode;
@@ -10,6 +11,7 @@ interface CardProps {
 }
 
 export function Card({
+  id,
   title,
   description,
   actions,
@@ -18,7 +20,7 @@ export function Card({
   padded = true,
 }: CardProps) {
   return (
-    <section className={`card ${className}`.trim()}>
+    <section id={id} className={`card ${className}`.trim()}>
       {title || actions ? (
         <header className="card-header">
           <div>

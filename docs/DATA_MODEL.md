@@ -16,11 +16,22 @@ membership from the database; client-supplied organization ids are ignored.
 | `local_graphs` | Editable draft graph (nodes, edges, revision) |
 | `tools` | HTTP/MCP tools, encrypted headers, JSON input schema |
 | `skills` | Reusable instruction blocks |
+| `knowledge_bases` | RAG corpora: mode (`lexical`/`vector`), embedding connection/model, chunk settings |
+| `knowledge_documents` | Original text and metadata; chunk count |
+| `knowledge_chunks` | Chunk text, ordinal, optional JSON embedding vector |
 | `agent_secrets` | Encrypted `{{secrets.NAME}}` values |
 | `api_credentials` | Customer keys: prefix, SHA-256 hash, scopes, revocation |
 | `runs` | Execution record, bounded input/output previews, error category |
 | `usage_events` | One request event per completed run |
 | `audit_events` | Actor/action/resource trail |
+
+## Knowledge storage
+
+`knowledge_chunks.embedding` is a JSON array, not `pgvector`, so the feature
+runs on managed Postgres without an extension. Search loads at most
+`KNOWLEDGE_MAX_CHUNKS_PER_RUN` chunks for a base and scores them in-process
+(cosine for vector mode, term coverage for lexical mode). A chunk belongs to
+exactly one document and one base; deleting a base removes both in the API.
 
 ## Graph storage
 
@@ -45,7 +56,9 @@ membership from the database; client-supplied organization ids are ignored.
 ```
 
 Edges use `sourceHandle` `null`, `true/false` for conditions, or `pass/fail` for
-guardrails. Validation rejects unknown nodes, merges, cycles, unreachable nodes,
+guardrails. A `retrieval` node config is
+`{knowledge_base_id, query, top_k, min_score, output_key}` and writes the
+formatted context plus `<output_key>_results`. Validation rejects unknown nodes, merges, cycles, unreachable nodes,
 and branches that do not end at an output.
 
 On publish, the graph is copied into `agent_versions.snapshot.graph`. The

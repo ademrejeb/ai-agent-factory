@@ -26,6 +26,8 @@ class ExecutionRequest:
     allow_private_urls: bool = False
     max_http_response_bytes: int = 2_000_000
     settings: Any = None
+    # (knowledge_base_id, query, top_k, min_score) -> {mode, context, results}
+    retrieval: Any = None
 
 
 @dataclass

@@ -17,6 +17,7 @@ from app.models import (
     AgentVersion,
     AuditEvent,
     Deployment,
+    KnowledgeBase,
     LocalGraph,
     ProviderConnection,
     Run,
@@ -44,7 +45,7 @@ from app.services.execution import (
     stream_execution,
 )
 from app.services.net import validate_outbound_url
-from app.services.templates import ticketing_dispatch_graph
+from app.services.templates import rag_assistant_graph, ticketing_dispatch_graph
 from app.services.local_graph import (
     GraphValidationError,
     default_graph,
@@ -123,6 +124,31 @@ def create_agent(
     ws = db.get(Workspace, body.workspace_id)
     if not ws or ws.organization_id != ctx.organization.id:
         raise AppError("not_found", "Workspace not found.", 404)
+
+    connection: ProviderConnection | None = None
+    model = (body.model or "").strip() or None
+    if body.provider_connection_id:
+        connection = db.get(ProviderConnection, body.provider_connection_id)
+        if not connection or connection.organization_id != ctx.organization.id:
+            raise AppError("not_found", "Provider connection not found.", 404)
+        if connection.provider != "langchain":
+            raise AppError(
+                "unsupported_capability",
+                "Visual agents need a LangChain connection.",
+                409,
+                {"provider": connection.provider},
+            )
+        if not model:
+            configured = (connection.extra_config or {}).get("model")
+            model = configured.strip() if isinstance(configured, str) else None
+        if not model:
+            raise AppError(
+                "invalid_request",
+                "Choose a model, or set a default model on the connection.",
+                400,
+            )
+
+    now = datetime.now(UTC)
     agent = Agent(
         id=new_id("agent"),
         organization_id=ctx.organization.id,
@@ -131,10 +157,28 @@ def create_agent(
         description=body.description,
         purpose=body.purpose,
         tags=body.tags,
-        lifecycle_status=DRAFT,
-        created_at=datetime.now(UTC),
+        lifecycle_status=CONFIGURED if connection else DRAFT,
+        provider="langchain" if connection else None,
+        provider_connection_id=connection.id if connection else None,
+        provider_resource_kind="graph" if connection else None,
+        created_at=now,
     )
     db.add(agent)
+    db.flush()
+    if connection:
+        graph = default_graph(model=model)
+        db.add(
+            LocalGraph(
+                id=new_id("lgr"),
+                organization_id=ctx.organization.id,
+                agent_id=agent.id,
+                revision=1,
+                nodes=graph["nodes"],
+                edges=graph["edges"],
+                created_at=now,
+                updated_at=now,
+            )
+        )
     db.commit()
     db.refresh(agent)
     return agent_out(agent)
@@ -158,15 +202,10 @@ def create_agent_from_template(
     if conn.provider != "langchain":
         raise AppError(
             "unsupported_capability",
-            "Ticket dispatch templates currently require a LangChain connection.",
+            "Templates currently require a LangChain connection.",
             409,
             {"provider": conn.provider},
         )
-    validate_outbound_url(
-        body.ticketing_base_url,
-        allow_private=settings.private_urls_allowed,
-        label="Ticketing base URL",
-    )
     model = body.model or (conn.extra_config or {}).get("model")
     if not isinstance(model, str) or not model.strip():
         raise AppError(
@@ -174,6 +213,31 @@ def create_agent_from_template(
             "The LangChain connection must have a default model, or pass model explicitly.",
             400,
         )
+
+    knowledge_base: KnowledgeBase | None = None
+    if body.template == "rag_assistant":
+        if not body.knowledge_base_id:
+            raise AppError(
+                "invalid_request",
+                "Choose the knowledge base this assistant should answer from.",
+                400,
+            )
+        knowledge_base = db.get(KnowledgeBase, body.knowledge_base_id)
+        if not knowledge_base or knowledge_base.organization_id != ctx.organization.id:
+            raise AppError("not_found", "Knowledge base not found.", 404)
+    else:
+        if len(body.ticketing_base_url) < 8 or len(body.ticketing_agent_key) < 16:
+            raise AppError(
+                "invalid_request",
+                "The ticketing template needs a base URL and an agent key.",
+                400,
+            )
+        validate_outbound_url(
+            body.ticketing_base_url,
+            allow_private=settings.private_urls_allowed,
+            label="Ticketing base URL",
+        )
+
     now = datetime.now(UTC)
     agent = Agent(
         id=new_id("agent"),
@@ -182,8 +246,16 @@ def create_agent_from_template(
         name=body.name.strip(),
         description=body.description,
         purpose=body.purpose
-        or "Analyse incoming field-service requests and dispatch the most adaptable technician using real skills, proximity, load and history metrics.",
-        tags=["ticketing", "dispatch", "field-service"],
+        or (
+            "Answer questions from the selected knowledge base and cite the documents it used."
+            if knowledge_base
+            else "Analyse incoming field-service requests and dispatch the most adaptable technician using real skills, proximity, load and history metrics."
+        ),
+        tags=(
+            ["rag", "knowledge", "qa"]
+            if knowledge_base
+            else ["ticketing", "dispatch", "field-service"]
+        ),
         lifecycle_status=CONFIGURED,
         provider="langchain",
         provider_connection_id=conn.id,
@@ -192,8 +264,15 @@ def create_agent_from_template(
     )
     db.add(agent)
     db.flush()
-    graph = ticketing_dispatch_graph(
-        ticketing_base_url=body.ticketing_base_url, model=model.strip()
+    graph = (
+        rag_assistant_graph(
+            knowledge_base_id=knowledge_base.id,
+            model=model.strip(),
+        )
+        if knowledge_base
+        else ticketing_dispatch_graph(
+            ticketing_base_url=body.ticketing_base_url, model=model.strip()
+        )
     )
     db.add(
         LocalGraph(
@@ -207,17 +286,18 @@ def create_agent_from_template(
             updated_at=now,
         )
     )
-    db.add(
-        AgentSecret(
-            id=new_id("asec"),
-            organization_id=ctx.organization.id,
-            agent_id=agent.id,
-            name="ticketing_agent_key",
-            value_encrypted=encrypt_secret(settings, body.ticketing_agent_key),
-            created_at=now,
-            updated_at=now,
+    if knowledge_base is None:
+        db.add(
+            AgentSecret(
+                id=new_id("asec"),
+                organization_id=ctx.organization.id,
+                agent_id=agent.id,
+                name="ticketing_agent_key",
+                value_encrypted=encrypt_secret(settings, body.ticketing_agent_key),
+                created_at=now,
+                updated_at=now,
+            )
         )
-    )
     _audit_workflow(
         db,
         ctx,
@@ -226,7 +306,8 @@ def create_agent_from_template(
         {
             "template": body.template,
             "provider_connection_id": conn.id,
-            "ticketing_base_url": body.ticketing_base_url,
+            "knowledge_base_id": knowledge_base.id if knowledge_base else None,
+            "ticketing_base_url": body.ticketing_base_url or None,
         },
     )
     db.commit()

@@ -22,7 +22,17 @@ MAX_NODES = 60
 MAX_EDGES = 120
 MAX_TEMPLATE_DEPTH = 8
 
-NODE_TYPES = {"input", "llm", "http", "condition", "tool", "agent", "guardrail", "output"}
+NODE_TYPES = {
+    "input",
+    "llm",
+    "http",
+    "condition",
+    "tool",
+    "agent",
+    "guardrail",
+    "retrieval",
+    "output",
+}
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 ROUTING_HANDLES = {"condition": {"true", "false"}, "guardrail": {"pass", "fail"}}
 MAX_AGENT_STEPS = 12
@@ -44,6 +54,23 @@ CONDITION_OPERATORS = {
     "not_in",
 }
 INPUT_FIELD_TYPES = {"string", "number", "boolean", "object", "array"}
+GUARDRAIL_PRESETS = {"", "pii", "prompt_injection", "json_object", "safe_text"}
+RESPONSE_FORMATS = {"text", "json_object"}
+PII_PATTERNS = (
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "an email address"),
+    (re.compile(r"(?<!\d)(?:\+?\d[\d .()-]{7,}\d)(?!\d)"), "a phone number"),
+    (re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)"), "a card/IBAN number"),
+)
+PROMPT_INJECTION_TERMS = (
+    "ignore previous instructions",
+    "ignore all previous",
+    "disregard previous",
+    "reveal your system prompt",
+    "show your system prompt",
+    "you are now",
+    "jailbreak",
+    "developer mode",
+)
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _TEMPLATE_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.\[\]-]+)\s*\}\}")
@@ -140,6 +167,38 @@ def _normalize_input_config(config: dict[str, Any], node_id: str) -> dict[str, A
     }
 
 
+def _normalize_context(config: dict[str, Any], node_id: str) -> dict[str, Any]:
+    raw = config.get("context")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        _fail(f"Node '{node_id}' context must be an object.", node_id)
+    history = bool(raw.get("history", False))
+    history_path = _text(raw.get("history_path")) or "history"
+    if not _ID_RE.match(history_path.replace(".", "_")):
+        _fail(f"Node '{node_id}' context.history_path is invalid.", node_id)
+    max_messages = raw.get("max_history_messages", 6)
+    if (
+        isinstance(max_messages, bool)
+        or not isinstance(max_messages, int)
+        or not 0 <= max_messages <= 50
+    ):
+        _fail(f"Node '{node_id}' context.max_history_messages must be 0-50.", node_id)
+    max_chars = raw.get("max_context_chars", 8000)
+    if (
+        isinstance(max_chars, bool)
+        or not isinstance(max_chars, int)
+        or not 500 <= max_chars <= 50000
+    ):
+        _fail(f"Node '{node_id}' context.max_context_chars must be 500-50000.", node_id)
+    return {
+        "history": history,
+        "history_path": history_path,
+        "max_history_messages": max_messages,
+        "max_context_chars": max_chars,
+    }
+
+
 def _normalize_llm_config(config: dict[str, Any], node_id: str) -> dict[str, Any]:
     prompt = config.get("prompt", "")
     if not isinstance(prompt, str) or not prompt.strip():
@@ -162,12 +221,17 @@ def _normalize_llm_config(config: dict[str, Any], node_id: str) -> dict[str, Any
     output_key = config.get("output_key") or node_id
     if not isinstance(output_key, str) or not _ID_RE.match(output_key):
         _fail(f"LLM node '{node_id}' output_key is invalid.", node_id)
+    response_format = config.get("response_format") or "text"
+    if response_format not in RESPONSE_FORMATS:
+        _fail(f"LLM node '{node_id}' response_format is invalid.", node_id)
     return {
         "prompt": prompt,
         "system": system,
         "model": model.strip() if isinstance(model, str) else None,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "context": _normalize_context(config, node_id),
+        "response_format": response_format,
         "output_key": output_key,
     }
 
@@ -296,6 +360,7 @@ def _normalize_agent_config(config: dict[str, Any], node_id: str) -> dict[str, A
         "tool_ids": _string_list(config.get("tool_ids"), label="tool_ids", node_id=node_id),
         "skill_ids": _string_list(config.get("skill_ids"), label="skill_ids", node_id=node_id),
         "max_steps": max_steps,
+        "context": _normalize_context(config, node_id),
         "output_key": output_key,
         "final_tool": config.get("final_tool") if isinstance(config.get("final_tool"), str) else None,
     }
@@ -319,8 +384,19 @@ def _normalize_guardrail_config(config: dict[str, Any], node_id: str) -> dict[st
             except re.error as exc:
                 _fail(f"Guardrail node '{node_id}' has an invalid regular expression.", node_id)
                 raise exc
+    preset = str(config.get("preset") or "")
+    if preset not in GUARDRAIL_PRESETS:
+        _fail(
+            f"Guardrail node '{node_id}' preset must be one of {sorted(GUARDRAIL_PRESETS)}.",
+            node_id,
+        )
+    min_chars = config.get("min_chars")
+    if min_chars is not None:
+        if isinstance(min_chars, bool) or not isinstance(min_chars, int) or min_chars < 0:
+            _fail(f"Guardrail node '{node_id}' min_chars must be a positive integer.", node_id)
     return {
         "path": path.strip(),
+        "preset": preset,
         "max_chars": max_chars,
         "deny_terms": _string_list(config.get("deny_terms"), label="deny_terms", node_id=node_id),
         "require_terms": _string_list(
@@ -328,8 +404,35 @@ def _normalize_guardrail_config(config: dict[str, Any], node_id: str) -> dict[st
         ),
         "pattern": pattern or "",
         "pattern_mode": "allow" if config.get("pattern_mode") == "allow" else "deny",
-        "min_chars": config.get("min_chars") if isinstance(config.get("min_chars"), int) else None,
+        "min_chars": min_chars,
         "case_sensitive": bool(config.get("case_sensitive", False)),
+    }
+
+
+def _normalize_retrieval_config(config: dict[str, Any], node_id: str) -> dict[str, Any]:
+    knowledge_base_id = config.get("knowledge_base_id")
+    if not isinstance(knowledge_base_id, str) or not knowledge_base_id.strip():
+        _fail(f"Retrieval node '{node_id}' needs a knowledge base.", node_id)
+    query = config.get("query")
+    if not isinstance(query, str) or not query.strip():
+        _fail(f"Retrieval node '{node_id}' needs a query template.", node_id)
+    top_k = config.get("top_k", 5)
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 20:
+        _fail(f"Retrieval node '{node_id}' top_k must be between 1 and 20.", node_id)
+    min_score = config.get("min_score")
+    if min_score is not None:
+        min_score = _number(min_score, f"Retrieval node '{node_id}' min_score", minimum=0)
+        if min_score > 1:
+            _fail(f"Retrieval node '{node_id}' min_score must be at most 1.", node_id)
+    output_key = config.get("output_key") or node_id
+    if not isinstance(output_key, str) or not _ID_RE.match(output_key):
+        _fail(f"Retrieval node '{node_id}' output_key is invalid.", node_id)
+    return {
+        "knowledge_base_id": knowledge_base_id.strip(),
+        "query": query,
+        "top_k": top_k,
+        "min_score": min_score,
+        "output_key": output_key,
     }
 
 
@@ -376,6 +479,8 @@ def _normalize_node(raw: Any, node_id: str) -> dict[str, Any]:
         normalized_config = _normalize_agent_config(config, node_id)
     elif kind == "guardrail":
         normalized_config = _normalize_guardrail_config(config, node_id)
+    elif kind == "retrieval":
+        normalized_config = _normalize_retrieval_config(config, node_id)
     else:
         normalized_config = _normalize_output_config(config, node_id)
     return {
@@ -734,6 +839,23 @@ def evaluate_guardrail(config: dict[str, Any], values: dict[str, Any]) -> dict[s
     text = stringify(raw)
     haystack = text if config.get("case_sensitive") else text.lower()
     reasons: list[str] = []
+
+    preset = str(config.get("preset") or "")
+    if preset == "pii":
+        for pattern, label in PII_PATTERNS:
+            if pattern.search(text):
+                reasons.append(f"Contains {label}; remove personal data before continuing.")
+    elif preset == "prompt_injection":
+        for term in PROMPT_INJECTION_TERMS:
+            if term in haystack:
+                reasons.append(f"Contains a prompt-injection phrase ('{term}').")
+    elif preset == "json_object":
+        try:
+            parsed = json.loads(text)
+            if not isinstance(parsed, dict):
+                reasons.append("The value must be a JSON object.")
+        except ValueError:
+            reasons.append("The value is not valid JSON.")
 
     max_chars = config.get("max_chars")
     if isinstance(max_chars, int) and len(text) > max_chars:

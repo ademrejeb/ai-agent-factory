@@ -13,19 +13,22 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { InlineError, LoadingBlock } from "@/components/ui/States";
 import { api, errorMessage } from "@/lib/api";
 import { useApi } from "@/hooks/useApi";
-import type { Agent, ListResponse, ProviderConnection, Workspace } from "@/lib/types";
+import type { Agent, KnowledgeBase, ListResponse, ProviderConnection, Workspace } from "@/lib/types";
 
 export default function NewAgentPage() {
   const router = useRouter();
   const toast = useToast();
   const workspaces = useApi<ListResponse<Workspace>>("/api/v1/workspaces");
   const connections = useApi<ListResponse<ProviderConnection>>("/api/v1/provider-connections");
+  const knowledgeBases = useApi<ListResponse<KnowledgeBase>>("/api/v1/knowledge-bases");
 
   const [workspaceId, setWorkspaceId] = useState("");
   const [name, setName] = useState("");
   const [purpose, setPurpose] = useState("");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
+  const [connectionId, setConnectionId] = useState("");
+  const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,6 +38,12 @@ export default function NewAgentPage() {
   const [ticketingAgentKey, setTicketingAgentKey] = useState("");
   const [templateBusy, setTemplateBusy] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
+
+  const [ragName, setRagName] = useState("Knowledge assistant");
+  const [ragConnectionId, setRagConnectionId] = useState("");
+  const [ragKnowledgeBaseId, setRagKnowledgeBaseId] = useState("");
+  const [ragBusy, setRagBusy] = useState(false);
+  const [ragError, setRagError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!workspaceId && workspaces.data?.items.length) {
@@ -50,7 +59,16 @@ export default function NewAgentPage() {
     if (!templateConnectionId && langchainConnections.length) {
       setTemplateConnectionId(langchainConnections[0].id);
     }
-  }, [langchainConnections, templateConnectionId]);
+    if (!ragConnectionId && langchainConnections.length) {
+      setRagConnectionId(langchainConnections[0].id);
+    }
+  }, [langchainConnections, templateConnectionId, ragConnectionId]);
+
+  useEffect(() => {
+    if (!ragKnowledgeBaseId && knowledgeBases.data?.items.length) {
+      setRagKnowledgeBaseId(knowledgeBases.data.items[0].id);
+    }
+  }, [knowledgeBases.data, ragKnowledgeBaseId]);
 
   const canSubmit = workspaceId !== "" && name.trim().length > 0 && !busy;
 
@@ -76,6 +94,27 @@ export default function NewAgentPage() {
     }
   }
 
+  async function createRagAssistant(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!workspaceId || !ragConnectionId || !ragKnowledgeBaseId) return;
+    setRagBusy(true);
+    setRagError(null);
+    try {
+      const agent = await api.post<Agent>("/api/v1/agents/from-template", {
+        workspace_id: workspaceId,
+        name: ragName.trim(),
+        template: "rag_assistant",
+        provider_connection_id: ragConnectionId,
+        knowledge_base_id: ragKnowledgeBaseId,
+      });
+      toast.push("Knowledge assistant created. Test it with a real question.", "success");
+      router.push(`/agents/${agent.id}`);
+    } catch (err) {
+      setRagError(errorMessage(err));
+      setRagBusy(false);
+    }
+  }
+
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canSubmit) return;
@@ -92,8 +131,15 @@ export default function NewAgentPage() {
           .map((tag) => tag.trim())
           .filter(Boolean)
           .slice(0, 20),
+        provider_connection_id: connectionId || null,
+        model: model.trim() || null,
       });
-      toast.push("Agent created. Next: link a model connection.", "success");
+      toast.push(
+        connectionId
+          ? "Agent created and linked. Open the graph to customize it."
+          : "Agent created. Next: link a model connection.",
+        "success",
+      );
       router.push(`/agents/${agent.id}`);
     } catch (err) {
       setError(errorMessage(err));
@@ -173,6 +219,39 @@ export default function NewAgentPage() {
                   />
                 </Field>
               </div>
+              <div className="form-grid">
+                <Field
+                  label="Model connection"
+                  htmlFor="agent-connection"
+                  hint="Optional. Pre-links a model so the agent is runnable immediately."
+                >
+                  <Select
+                    id="agent-connection"
+                    value={connectionId}
+                    onChange={(event) => setConnectionId(event.target.value)}
+                  >
+                    <option value="">Create an empty agent</option>
+                    {langchainConnections.map((connection) => (
+                      <option key={connection.id} value={connection.id}>
+                        {connection.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field
+                  label="Model"
+                  htmlFor="agent-model"
+                  hint="Leave empty to use the connection default."
+                >
+                  <Input
+                    id="agent-model"
+                    value={model}
+                    onChange={(event) => setModel(event.target.value)}
+                    placeholder="llama3.2"
+                    disabled={!connectionId}
+                  />
+                </Field>
+              </div>
               <Field
                 label="Purpose"
                 htmlFor="agent-purpose"
@@ -208,6 +287,73 @@ export default function NewAgentPage() {
         </Card>
 
         <div className="stack">
+          <Card title="Start from a knowledge assistant">
+            <p className="small muted" style={{ marginTop: 0 }}>
+              Creates a real input → knowledge search → grounded answer → output graph. Add
+              documents in <Link href="/knowledge">Knowledge</Link> first; the agent retrieves
+              and cites them.
+            </p>
+            {knowledgeBases.error ? <InlineError message={knowledgeBases.error} /> : null}
+            {ragError ? <InlineError message={ragError} /> : null}
+            {langchainConnections.length === 0 ? (
+              <p className="small muted">
+                Add a model connection in <Link href="/providers">Model providers</Link> first.
+              </p>
+            ) : (knowledgeBases.data?.items.length ?? 0) === 0 ? (
+              <p className="small muted">
+                No knowledge bases yet. Create one in <Link href="/knowledge">Knowledge</Link>,
+                then come back.
+              </p>
+            ) : (
+              <form className="stack" onSubmit={createRagAssistant}>
+                <Field label="Agent name" htmlFor="rag-name" required>
+                  <Input
+                    id="rag-name"
+                    value={ragName}
+                    onChange={(event) => setRagName(event.target.value)}
+                    maxLength={200}
+                    required
+                  />
+                </Field>
+                <Field label="Knowledge base" htmlFor="rag-kb" required>
+                  <Select
+                    id="rag-kb"
+                    value={ragKnowledgeBaseId}
+                    onChange={(event) => setRagKnowledgeBaseId(event.target.value)}
+                    required
+                  >
+                    {knowledgeBases.data?.items.map((base) => (
+                      <option key={base.id} value={base.id}>
+                        {base.name} · {base.document_count} docs · {base.mode}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Model connection" htmlFor="rag-connection" required>
+                  <Select
+                    id="rag-connection"
+                    value={ragConnectionId}
+                    onChange={(event) => setRagConnectionId(event.target.value)}
+                    required
+                  >
+                    {langchainConnections.map((connection) => (
+                      <option key={connection.id} value={connection.id}>
+                        {connection.name} · {String(connection.extra_config.model ?? "model")}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Button
+                  type="submit"
+                  loading={ragBusy}
+                  disabled={!workspaceId || !ragConnectionId || !ragKnowledgeBaseId}
+                >
+                  Create knowledge assistant
+                </Button>
+              </form>
+            )}
+          </Card>
+
           <Card title="Start from the ticketing template">
             <p className="small muted" style={{ marginTop: 0 }}>
               Creates a real platform graph that loads live dispatch metrics from the

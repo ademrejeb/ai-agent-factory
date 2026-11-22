@@ -694,6 +694,53 @@ export default function AgentDetailPage() {
         ) : null}
       </Card>
 
+      <Card title="Next steps" description="A short path from an empty agent to a live endpoint.">
+        <ol className="readiness-list">
+          {[
+            {
+              done: Boolean(agent.provider),
+              title: "Link a model connection",
+              hint: "The platform verifies GET /models before saving the link.",
+              href: "#model",
+            },
+            {
+              done: ["tested", "validated", "published", "monitored"].includes(
+                agent.lifecycle_status,
+              ),
+              title: "Run a test",
+              hint: "Use the Test console with a realistic input. A passing test unlocks publishing.",
+              href: "#test",
+            },
+            {
+              done: Boolean(agent.deployment && agent.deployment.status === "active"),
+              title: "Publish a version",
+              hint: "Snapshots the saved graph and creates a deployment record.",
+              href: "#deployment",
+            },
+            {
+              done: Boolean(agent.deployment && agent.deployment.status === "active"),
+              title: "Create a scoped API key",
+              hint: "Gateway keys can run this agent and read its runs; nothing else.",
+              href: "/credentials",
+            },
+          ].map((step, index) => (
+            <li key={step.title} className={step.done ? "readiness-done" : ""}>
+              <span className="readiness-index">{step.done ? "✓" : index + 1}</span>
+              <div>
+                <p className="readiness-title">
+                  {step.href.startsWith("#") ? (
+                    <a href={step.href}>{step.title}</a>
+                  ) : (
+                    <Link href={step.href}>{step.title}</Link>
+                  )}
+                </p>
+                <p className="readiness-hint">{step.hint}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </Card>
+
       <div className="agent-detail-grid">
         <div className="stack">
           <Card title="Configuration" description="Platform-owned metadata. The model endpoint is configured in Model providers.">
@@ -1028,7 +1075,7 @@ export default function AgentDetailPage() {
         </div>
 
         <div className="stack">
-          <Card title="Deployment" padded>
+          <Card title="Deployment" padded id="deployment">
             {agent.deployment ? (
               <div className="stack-sm">
                 <div className="row-between">

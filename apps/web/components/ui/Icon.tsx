@@ -28,6 +28,7 @@ type IconName =
   | "terminal"
   | "workflow"
   | "save"
+  | "database"
   | "fit";
 
 const paths: Record<IconName, ReactNode> = {
@@ -149,6 +150,13 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M5 3h11l3 3v15H5z" />
       <path d="M8 3v6h7V3M8 21v-7h8v7" />
+    </>
+  ),
+  database: (
+    <>
+      <ellipse cx="12" cy="5.5" rx="8" ry="3" />
+      <path d="M4 5.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+      <path d="M4 11.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
     </>
   ),
   fit: <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5" />,
