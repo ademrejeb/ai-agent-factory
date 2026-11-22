@@ -243,3 +243,46 @@ export interface McpTool {
 export interface ListResponse<T> {
   items: T[];
 }
+
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  mode: "lexical" | "vector" | string;
+  embedding_connection_id: string | null;
+  embedding_model: string | null;
+  chunk_size: number;
+  chunk_overlap: number;
+  document_count: number;
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+  documents?: KnowledgeDocument[];
+}
+
+export interface KnowledgeDocument {
+  id: string;
+  name: string;
+  source_type: string;
+  mime_type: string;
+  size_bytes: number;
+  chunk_count: number;
+  created_at: string;
+}
+
+export interface KnowledgeSearchResult {
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  ordinal: number;
+  content: string;
+  score: number;
+}
+
+export interface KnowledgeSearchResponse {
+  mode: string;
+  query: string;
+  results: KnowledgeSearchResult[];
+  context: string;
+}

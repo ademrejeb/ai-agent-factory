@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     gateway_max_message_chars: int = 8_000
     gateway_max_extension_bytes: int = 32_000
     http_node_max_response_bytes: int = 2_000_000
+    # Retrieval scans at most this many chunks per knowledge base and run.
+    # Bases are meant for policy/FAQ corpora, not a general search engine.
+    knowledge_max_chunks_per_run: int = 5_000
     # None means "allow private targets only outside production". Set it
     # explicitly when a production deployment talks to Ollama or internal
     # MCP/tool servers.

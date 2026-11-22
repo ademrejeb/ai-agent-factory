@@ -124,6 +124,37 @@ class SkillUpdate(BaseModel):
     instructions: str | None = Field(default=None, min_length=1, max_length=20000)
 
 
+class KnowledgeBaseCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    mode: str = Field(default="lexical", pattern="^(lexical|vector)$")
+    embedding_connection_id: str | None = None
+    embedding_model: str | None = Field(default=None, max_length=200)
+    chunk_size: int = Field(default=1200, ge=200, le=8000)
+    chunk_overlap: int = Field(default=200, ge=0, le=2000)
+
+
+class KnowledgeBaseUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    mode: str | None = Field(default=None, pattern="^(lexical|vector)$")
+    embedding_connection_id: str | None = None
+    embedding_model: str | None = Field(default=None, max_length=200)
+    chunk_size: int | None = Field(default=None, ge=200, le=8000)
+    chunk_overlap: int | None = Field(default=None, ge=0, le=2000)
+
+
+class KnowledgeDocumentCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=240)
+    text: str = Field(min_length=1, max_length=2_000_000)
+    mime_type: str = Field(default="text/plain", max_length=120)
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=4000)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
 class OrganizationSwitch(BaseModel):
     organization_id: str
 
@@ -179,10 +210,11 @@ class AgentSecretUpsert(BaseModel):
 class AgentFromTemplate(BaseModel):
     workspace_id: str
     name: str = Field(min_length=2, max_length=200)
-    template: Literal["ticketing_dispatch"]
+    template: Literal["ticketing_dispatch", "rag_assistant"]
     provider_connection_id: str
-    ticketing_base_url: str = Field(min_length=8, max_length=500)
-    ticketing_agent_key: str = Field(min_length=16, max_length=500)
+    ticketing_base_url: str = Field(default="", max_length=500)
+    ticketing_agent_key: str = Field(default="", max_length=500)
+    knowledge_base_id: str | None = None
     model: str | None = Field(default=None, max_length=200)
     description: str = Field(default="", max_length=4000)
     purpose: str = Field(default="", max_length=4000)

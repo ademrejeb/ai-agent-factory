@@ -163,3 +163,116 @@ def ticketing_dispatch_graph(
         },
     ]
     return validate_graph(nodes, edges)
+
+
+RAG_ASSISTANT = "rag_assistant"
+
+RAG_SYSTEM = (
+    "You are a careful knowledge assistant. Answer only from the retrieved "
+    "context. If the context does not contain the answer, say that the "
+    "knowledge base does not cover it instead of guessing. Cite the document "
+    "names you used. Keep the answer concise and in the user's language."
+)
+
+RAG_PROMPT = (
+    "Question:\n{{ question }}\n\n"
+    "Retrieved context:\n{{ knowledge }}\n\n"
+    "Answer using only the retrieved context. Cite the document names."
+)
+
+
+def rag_assistant_graph(
+    *, knowledge_base_id: str, model: str | None = None
+) -> dict[str, Any]:
+    """Input → knowledge retrieval → grounded answer → output."""
+    nodes = {
+        "input": {
+            "id": "input",
+            "type": "input",
+            "name": "Question input",
+            "position": {"x": 40, "y": 160},
+            "config": {
+                "fields": [
+                    {
+                        "name": "question",
+                        "type": "string",
+                        "required": True,
+                        "default": None,
+                        "description": "The question to answer from the knowledge base.",
+                    },
+                    {
+                        "name": "history",
+                        "type": "array",
+                        "required": False,
+                        "default": [],
+                        "description": (
+                            "Optional chat history: [{\"role\":\"user\",\"content\":\"…\"}]."
+                        ),
+                    },
+                ],
+                "description": "A grounded question-answering agent.",
+            },
+        },
+        "knowledge": {
+            "id": "knowledge",
+            "type": "retrieval",
+            "name": "Search knowledge base",
+            "position": {"x": 360, "y": 160},
+            "config": {
+                "knowledge_base_id": knowledge_base_id,
+                "query": "{{ question }}",
+                "top_k": 5,
+                "min_score": None,
+                "output_key": "knowledge",
+            },
+        },
+        "answer": {
+            "id": "answer",
+            "type": "llm",
+            "name": "Write grounded answer",
+            "position": {"x": 680, "y": 160},
+            "config": {
+                "prompt": RAG_PROMPT,
+                "system": RAG_SYSTEM,
+                "model": model,
+                "temperature": 0.2,
+                "max_tokens": 900,
+                "context": {
+                    "history": True,
+                    "history_path": "history",
+                    "max_history_messages": 6,
+                    "max_context_chars": 8000,
+                },
+                "response_format": "text",
+                "output_key": "answer",
+            },
+        },
+        "output": {
+            "id": "output",
+            "type": "output",
+            "name": "Answer",
+            "position": {"x": 1000, "y": 160},
+            "config": {"template": "{{ answer }}", "path": None},
+        },
+    }
+    edges = [
+        {
+            "id": "e_input_knowledge",
+            "source": "input",
+            "target": "knowledge",
+            "sourceHandle": None,
+        },
+        {
+            "id": "e_knowledge_answer",
+            "source": "knowledge",
+            "target": "answer",
+            "sourceHandle": None,
+        },
+        {
+            "id": "e_answer_output",
+            "source": "answer",
+            "target": "output",
+            "sourceHandle": None,
+        },
+    ]
+    return validate_graph(nodes, edges)
