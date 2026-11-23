@@ -23,6 +23,7 @@ class ExecutionRequest:
     tools: dict[str, dict[str, Any]] = field(default_factory=dict)
     skills: dict[str, dict[str, Any]] = field(default_factory=dict)
     skill_ids: list[str] = field(default_factory=list)
+    agent_settings: dict[str, Any] = field(default_factory=dict)
     allow_private_urls: bool = False
     max_http_response_bytes: int = 2_000_000
     settings: Any = None

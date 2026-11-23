@@ -44,6 +44,7 @@ from app.services.local_graph import (
     template_paths,
     validate_graph,
 )
+from app.services.agent_settings import guardrail_config, normalize_agent_settings
 from app.services.net import validate_outbound_url
 from app.services.tools import call_tool_by_id
 
@@ -160,12 +161,18 @@ class LangGraphRuntime:
         default_skill_ids: list[str] | None = None,
         tool_runner: Callable[[str, dict[str, Any]], Any] | None = None,
         retrieval: Callable[[str, str, int, float | None], dict[str, Any]] | None = None,
+        agent_settings: dict[str, Any] | None = None,
     ) -> None:
-        self.model = model
+        self._agent_settings = normalize_agent_settings(agent_settings)
+        self.model = (self._agent_settings.get("model") or model).strip()
         self.api_key = api_key
         self.base_url = base_url
-        self.default_temperature = default_temperature
-        self.default_max_tokens = default_max_tokens
+        self.default_temperature = self._agent_settings.get(
+            "temperature", default_temperature
+        )
+        self.default_max_tokens = self._agent_settings.get(
+            "max_tokens", default_max_tokens
+        )
         self._model_factory = model_factory
         self._http_client = http_client
         self.streaming = streaming
@@ -269,6 +276,69 @@ class LangGraphRuntime:
             system = system[:keep]
         return system, history
 
+    def _node_context(self, node_config: dict[str, Any]) -> dict[str, Any]:
+        """Node context wins; agent settings fill what the node leaves open."""
+
+        context = dict(node_config.get("context") or {})
+        settings = self._agent_settings
+        if "max_history_messages" not in context:
+            limit = settings.get("max_history_messages")
+            if isinstance(limit, int):
+                context["max_history_messages"] = limit
+        if "max_context_chars" not in context:
+            tokens = settings.get("context_window_tokens")
+            if isinstance(tokens, int):
+                context["max_context_chars"] = int(tokens) * 4
+        return context
+
+    def _rag_block(self, query: str) -> tuple[str, dict[str, Any] | None]:
+        """Retrieve from the attached knowledge bases before a model call."""
+
+        settings = self._agent_settings
+        kb_ids = [item for item in (settings.get("knowledge_base_ids") or []) if item]
+        if not kb_ids or self._retrieval is None:
+            return "", None
+        top_k = int(settings.get("rag_top_k") or 4)
+        min_score = settings.get("rag_min_score")
+        blocks: list[str] = []
+        sources: list[dict[str, Any]] = []
+        for kb_id in kb_ids[:10]:
+            try:
+                result = self._retrieval(
+                    kb_id,
+                    query[:4000],
+                    top_k,
+                    float(min_score) if isinstance(min_score, (int, float)) else None,
+                )
+            except AppError as exc:
+                raise GraphRuntimeError(
+                    f"Knowledge retrieval failed: {exc.message}"
+                ) from exc
+            rows = result.get("results") if isinstance(result, dict) else None
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                blocks.append(
+                    f"[{row.get('document_name', 'document')}] {row.get('content', '')}"
+                )
+                sources.append(
+                    {
+                        "knowledge_base_id": kb_id,
+                        "document": row.get("document_name"),
+                        "score": row.get("score"),
+                    }
+                )
+        if not blocks:
+            return "", {"chunks": 0, "knowledge_base_ids": kb_ids, "sources": []}
+        text = "## Retrieved knowledge\n\n" + "\n\n".join(
+            blocks[: top_k * max(1, len(kb_ids))]
+        )
+        return text, {
+            "chunks": len(blocks),
+            "knowledge_base_ids": kb_ids,
+            "sources": sources[:20],
+        }
+
     # -- node implementations ----------------------------------------
     def _input_node(self, config: dict[str, Any], raw_inputs: dict[str, Any]):
         def run(state: GraphState) -> dict[str, Any]:
@@ -292,6 +362,12 @@ class LangGraphRuntime:
             values = state.get("values") or {}
             prompt = render_template(str(node_config.get("prompt") or ""), values)
             system = render_template(str(node_config.get("system") or ""), values).strip()
+            agent_system = str(self._agent_settings.get("system_prompt") or "").strip()
+            if agent_system:
+                system = (system + "\n\n" + agent_system).strip()
+            rag_text, rag_meta = self._rag_block(prompt)
+            if rag_text:
+                system = (system + "\n\n" + rag_text).strip()
             model_name = (node_config.get("model") or self.model).strip()
             temperature = node_config.get("temperature")
             if temperature is None:
@@ -299,7 +375,7 @@ class LangGraphRuntime:
             max_tokens = node_config.get("max_tokens")
             if max_tokens is None:
                 max_tokens = self.default_max_tokens
-            context = node_config.get("context") or {}
+            context = self._node_context(node_config)
             history = self._history_messages(values, context)
             system, history = self._trim_context(
                 system, history, prompt, int(context.get("max_context_chars") or 8000)
@@ -324,9 +400,20 @@ class LangGraphRuntime:
                 "output": text[:4000],
                 "tokens": tokens,
             }
+            steps = [step]
+            if rag_meta is not None:
+                steps.insert(
+                    0,
+                    {
+                        "node": node_id,
+                        "type": "retrieval",
+                        "scope": "agent",
+                        **rag_meta,
+                    },
+                )
             return {
                 "values": {output_key: text},
-                "steps": [step],
+                "steps": steps,
                 "tokens": tokens,
             }
 
@@ -501,6 +588,12 @@ class LangGraphRuntime:
             values = state.get("values") or {}
             prompt = render_template(str(node_config.get("prompt") or ""), values)
             system = render_template(str(node_config.get("system") or ""), values).strip()
+            agent_system = str(self._agent_settings.get("system_prompt") or "").strip()
+            if agent_system:
+                system = (system + "\n\n" + agent_system).strip()
+            rag_text, rag_meta = self._rag_block(prompt)
+            if rag_text:
+                system = (system + "\n\n" + rag_text).strip()
             requested_skills = list(node_config.get("skill_ids") or []) + self._default_skill_ids
             skill_ids = list(
                 dict.fromkeys(
@@ -529,7 +622,7 @@ class LangGraphRuntime:
             model = self._build_model(model_name, temperature, max_tokens)
             if specs:
                 model = model.bind_tools(specs)
-            context = node_config.get("context") or {}
+            context = self._node_context(node_config)
             history = self._history_messages(values, context)
             system, history = self._trim_context(
                 system, history, prompt, int(context.get("max_context_chars") or 8000)
@@ -540,6 +633,15 @@ class LangGraphRuntime:
             messages.extend(history)
             messages.append(HumanMessage(content=prompt))
             steps: list[dict[str, Any]] = []
+            if rag_meta is not None:
+                steps.append(
+                    {
+                        "node": node_id,
+                        "type": "retrieval",
+                        "scope": "agent",
+                        **rag_meta,
+                    }
+                )
             tokens = 0
             final_text = ""
             for iteration in range(1, max_steps + 1):
@@ -734,6 +836,23 @@ class LangGraphRuntime:
     ) -> GraphRunResult:
         normalized = validate_graph(graph.get("nodes"), graph.get("edges"))
         self._trace = []
+        pre_steps: list[dict[str, Any]] = []
+        input_guardrail = guardrail_config(self._agent_settings, "input")
+        if input_guardrail is not None:
+            decision = evaluate_guardrail(input_guardrail, {"input": inputs})
+            input_step = {
+                "node": "guardrail:input",
+                "type": "guardrail",
+                "scope": "input",
+                "passed": decision["passed"],
+                "reasons": decision["reasons"],
+            }
+            pre_steps.append(input_step)
+            if not decision["passed"]:
+                raise GraphRuntimeError(
+                    "Blocked by the input guardrail: " + " ".join(decision["reasons"]),
+                    steps=pre_steps,
+                )
         app = self._compile_with_inputs(normalized, inputs)
         config: RunnableConfig = {"recursion_limit": 100}
         if callbacks:
@@ -751,11 +870,28 @@ class LangGraphRuntime:
         output = values.get("_result")
         if not isinstance(output, dict):
             output = {"message": stringify(values.get("answer", values))}
+        steps = list(final_state.get("steps") or [])
+        output_guardrail = guardrail_config(self._agent_settings, "output")
+        if output_guardrail is not None:
+            decision = evaluate_guardrail(output_guardrail, {"output": output})
+            output_step = {
+                "node": "guardrail:output",
+                "type": "guardrail",
+                "scope": "output",
+                "passed": decision["passed"],
+                "reasons": decision["reasons"],
+            }
+            if not decision["passed"]:
+                raise GraphRuntimeError(
+                    "Blocked by the output guardrail: " + " ".join(decision["reasons"]),
+                    steps=pre_steps + steps + [output_step],
+                )
+            steps.append(output_step)
         return GraphRunResult(
             status="completed",
             output=output,
             values={key: value for key, value in values.items() if not key.startswith("_")},
-            steps=final_state.get("steps") or [],
+            steps=pre_steps + steps,
             token_count=final_state.get("tokens") or None,
         )
 

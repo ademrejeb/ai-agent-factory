@@ -70,6 +70,7 @@ class AgentCreate(BaseModel):
     # Optional: create a ready-to-run LangGraph agent instead of an empty record.
     provider_connection_id: str | None = None
     model: str | None = Field(default=None, max_length=200)
+    settings: dict[str, Any] | None = None
 
 
 class AgentLinkRequest(BaseModel):
@@ -84,6 +85,7 @@ class AgentUpdate(BaseModel):
     tags: list[str] | None = Field(default=None, max_length=20)
     skill_ids: list[str] | None = Field(default=None, max_length=50)
     workspace_id: str | None = None
+    settings: dict[str, Any] | None = None
 
 
 class ToolCreate(BaseModel):

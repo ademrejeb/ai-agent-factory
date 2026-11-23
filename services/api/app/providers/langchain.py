@@ -179,6 +179,7 @@ class LangChainProvider:
             tools=request.tools if request else None,
             skills=request.skills if request else None,
             default_skill_ids=request.skill_ids if request else None,
+            agent_settings=request.agent_settings if request else None,
             allow_private_urls=request.allow_private_urls if request else False,
             max_http_response_bytes=(
                 request.max_http_response_bytes if request else 2_000_000

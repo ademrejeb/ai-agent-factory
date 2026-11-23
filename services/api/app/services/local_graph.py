@@ -856,6 +856,13 @@ def evaluate_guardrail(config: dict[str, Any], values: dict[str, Any]) -> dict[s
                 reasons.append("The value must be a JSON object.")
         except ValueError:
             reasons.append("The value is not valid JSON.")
+    elif preset == "safe_text":
+        if any(ord(char) < 32 and char not in "\n\r\t" for char in text):
+            reasons.append("Contains control characters.")
+        lowered = text.lower()
+        for marker in ("<script", "javascript:", "data:text/html"):
+            if marker in lowered:
+                reasons.append(f"Contains unsafe markup ('{marker}').")
 
     max_chars = config.get("max_chars")
     if isinstance(max_chars, int) and len(text) > max_chars:

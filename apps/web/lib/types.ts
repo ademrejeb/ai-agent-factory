@@ -50,6 +50,22 @@ export interface Deployment {
   created_at: string;
 }
 
+export interface AgentSettings {
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  context_window_tokens?: number;
+  max_history_messages?: number;
+  guardrail_input?: string;
+  guardrail_output?: string;
+  deny_terms?: string[];
+  knowledge_base_ids?: string[];
+  rag_top_k?: number;
+  rag_min_score?: number;
+  system_prompt?: string;
+  embedding_model?: string;
+}
+
 export interface Agent {
   id: string;
   workspace_id: string;
@@ -58,6 +74,7 @@ export interface Agent {
   purpose: string;
   tags: string[];
   skill_ids: string[];
+  settings?: AgentSettings;
   lifecycle_status: LifecycleStatus;
   provider: string | null;
   provider_connection_id: string | null;

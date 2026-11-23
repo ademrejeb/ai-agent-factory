@@ -91,6 +91,7 @@ class Agent(Base):
     provider_resource_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     provider_resource_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    settings: Mapped[dict] = mapped_column(JSON, default=dict)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

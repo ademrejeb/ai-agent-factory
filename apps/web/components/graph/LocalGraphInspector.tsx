@@ -503,6 +503,21 @@ function AgentNodeEditor({
           onChange={(event) => onChange({ system: event.target.value })}
         />
       </div>
+      <div className="wf-field">
+        <label className="field-label" htmlFor="graph-agent-model">
+          Model override
+        </label>
+        <Input
+          id="graph-agent-model"
+          value={typeof config.model === "string" ? config.model : ""}
+          disabled={readOnly}
+          placeholder="Agent setting or connection default"
+          onChange={(event) => onChange({ model: event.target.value || null })}
+        />
+        <p className="small faint">
+          Leave empty to use the agent settings model. Example: openrouter/auto.
+        </p>
+      </div>
       <div className="wf-two-col">
         <div className="wf-field">
           <label className="field-label" htmlFor="graph-agent-temperature">Temperature</label>

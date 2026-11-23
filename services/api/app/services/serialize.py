@@ -39,6 +39,7 @@ def agent_out(agent: Agent, deployment: Deployment | None = None) -> dict:
         "purpose": agent.purpose,
         "tags": agent.tags,
         "skill_ids": agent.skill_ids or [],
+        "settings": agent.settings or {},
         "lifecycle_status": agent.lifecycle_status,
         "provider": agent.provider,
         "provider_connection_id": agent.provider_connection_id,

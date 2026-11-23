@@ -39,6 +39,7 @@ from app.security import decrypt_secret
 from app.services.langgraph_runtime import graph_from_snapshot
 from app.services.knowledge import make_retriever
 from app.services.local_graph import GraphValidationError, default_graph, validate_graph
+from app.services.agent_settings import normalize_agent_settings
 
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -64,6 +65,7 @@ class ExecutionContext:
     tools: dict[str, dict[str, Any]] = field(default_factory=dict)
     skills: dict[str, dict[str, Any]] = field(default_factory=dict)
     skill_ids: list[str] = field(default_factory=list)
+    agent_settings: dict[str, Any] = field(default_factory=dict)
     retrieval: Any = None
     max_message_chars: int = 8_000
     max_extension_bytes: int = 32_000
@@ -262,6 +264,7 @@ def prepare_execution(
             for item in (agent.skill_ids or [])
             if isinstance(item, str) and item
         ],
+        agent_settings=normalize_agent_settings(agent.settings or {}),
         retrieval=make_retriever(settings, agent.organization_id),
         max_message_chars=settings.gateway_max_message_chars,
         max_extension_bytes=settings.gateway_max_extension_bytes,
@@ -474,6 +477,7 @@ def _request_for(ctx: ExecutionContext, settings: Settings, payload: dict[str, A
         tools=ctx.tools,
         skills=ctx.skills,
         skill_ids=ctx.skill_ids,
+        agent_settings=ctx.agent_settings,
         allow_private_urls=settings.private_urls_allowed,
         max_http_response_bytes=settings.http_node_max_response_bytes,
         settings=settings,

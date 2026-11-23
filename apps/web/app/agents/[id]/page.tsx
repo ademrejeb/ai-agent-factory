@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useToast } from "@/components/providers/ToastProvider";
+import { AgentSettingsCard } from "@/components/agents/AgentSettingsCard";
 import { Badge, StatusBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -37,6 +38,7 @@ import type {
   AgentSecret,
   AgentVersion,
   Deployment,
+  KnowledgeBase,
   ListResponse,
   ProviderConnection,
   ProviderDescriptor,
@@ -84,6 +86,7 @@ export default function AgentDetailPage() {
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
   const skillsApi = useApi<ListResponse<Skill>>("/api/v1/skills");
+  const knowledgeApi = useApi<ListResponse<KnowledgeBase>>("/api/v1/knowledge-bases");
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -834,6 +837,13 @@ export default function AgentDetailPage() {
               </div>
             </form>
           </Card>
+
+          <AgentSettingsCard
+            agent={agent}
+            connectionId={agent.provider_connection_id}
+            knowledgeBases={knowledgeApi.data?.items ?? []}
+            onSaved={() => agentApi.reload()}
+          />
 
           <Card
             title="Model link"

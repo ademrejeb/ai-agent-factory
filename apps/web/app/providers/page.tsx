@@ -65,6 +65,17 @@ export default function ProvidersPage() {
     setFormError(null);
   }
 
+  function openOpenRouter() {
+    const provider = catalog.data?.items.find((item) => item.id === "langchain");
+    if (!provider) return;
+    setDescriptor(provider);
+    setName("OpenRouter");
+    setBaseUrl("https://openrouter.ai/api/v1");
+    setApiKey("");
+    setModel("openrouter/auto");
+    setFormError(null);
+  }
+
   async function loadModels(connection: ProviderConnection) {
     setLoadingModels(connection.id);
     try {
@@ -160,7 +171,10 @@ export default function ProvidersPage() {
             >
               Refresh
             </Button>
-            <Button icon={<Icon name="plus" size={15} />} onClick={openOllama}>
+            <Button icon={<Icon name="plus" size={15} />} onClick={openOpenRouter}>
+              Use OpenRouter
+            </Button>
+            <Button variant="secondary" icon={<Icon name="plus" size={15} />} onClick={openOllama}>
               Use local Ollama
             </Button>
           </>

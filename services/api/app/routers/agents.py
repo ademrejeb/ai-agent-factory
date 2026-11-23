@@ -51,6 +51,7 @@ from app.services.local_graph import (
     default_graph,
     validate_graph,
 )
+from app.services.agent_settings import normalize_agent_settings
 from app.services.serialize import agent_out, deployment_out, run_out, version_out
 from app.services.sse import event_stream_response
 
@@ -157,6 +158,7 @@ def create_agent(
         description=body.description,
         purpose=body.purpose,
         tags=body.tags,
+        settings=normalize_agent_settings(body.settings),
         lifecycle_status=CONFIGURED if connection else DRAFT,
         provider="langchain" if connection else None,
         provider_connection_id=connection.id if connection else None,
@@ -369,6 +371,28 @@ def update_agent(
                 {"skill_ids": sorted(unknown)},
             )
         agent.skill_ids = sorted(valid)
+    if body.settings is not None:
+        normalized = normalize_agent_settings(body.settings)
+        knowledge_base_ids = normalized.get("knowledge_base_ids") or []
+        if knowledge_base_ids:
+            valid_bases = {
+                row.id
+                for row in db.query(KnowledgeBase)
+                .filter(
+                    KnowledgeBase.organization_id == ctx.organization.id,
+                    KnowledgeBase.id.in_(knowledge_base_ids),
+                )
+                .all()
+            }
+            unknown = set(knowledge_base_ids) - valid_bases
+            if unknown:
+                raise AppError(
+                    "invalid_request",
+                    "One or more knowledge bases do not belong to this organization.",
+                    400,
+                    {"knowledge_base_ids": sorted(unknown)},
+                )
+        agent.settings = normalized
     db.commit()
     db.refresh(agent)
     return agent_out(agent, latest_deployment(db, agent.id))

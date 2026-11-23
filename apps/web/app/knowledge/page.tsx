@@ -390,11 +390,19 @@ export default function KnowledgePage() {
               >
                 <Input
                   id="kb-embedding-model"
+                  list="embedding-model-options"
                   value={embeddingModel}
                   onChange={(event) => setEmbeddingModel(event.target.value)}
                   placeholder="nomic-embed-text"
                   required
                 />
+                <datalist id="embedding-model-options">
+                  <option value="nomic-embed-text" />
+                  <option value="mxbai-embed-large" />
+                  <option value="bge-m3" />
+                  <option value="text-embedding-3-small" />
+                  <option value="text-embedding-3-large" />
+                </datalist>
               </Field>
             ) : null}
             <div className="row">
