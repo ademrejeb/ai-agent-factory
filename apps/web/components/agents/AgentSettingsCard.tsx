@@ -306,6 +306,10 @@ export function AgentSettingsCard({
                 ))}
               </div>
             )}
+            <p className="small faint" style={{ marginTop: 8 }}>
+              Vector knowledge bases use their own embedding connection and model
+              (configure them in Knowledge). Keyword bases need no embeddings.
+            </p>
           </div>
 
           <Field label="RAG top-k" htmlFor="agent-rag-top-k">
