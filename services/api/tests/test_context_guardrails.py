@@ -1,7 +1,11 @@
 """Context engineering and guardrail presets."""
 
+import pytest
+
+from app.services.agent_settings import normalize_agent_settings
 from app.services.langgraph_runtime import LangGraphRuntime
 from app.services.local_graph import (
+    GraphRuntimeError,
     GraphValidationError,
     evaluate_guardrail,
     validate_graph,
@@ -204,3 +208,120 @@ class _EchoModel:
         from langchain_core.messages import AIMessage
 
         return AIMessage(content=self.response)
+
+
+def _single_llm_graph() -> dict:
+    return {
+        "nodes": {
+            "input": {
+                "id": "input",
+                "type": "input",
+                "name": "Input",
+                "position": {"x": 0, "y": 0},
+                "config": {
+                    "fields": [{"name": "message", "type": "string", "required": True}]
+                },
+            },
+            "llm": {
+                "id": "llm",
+                "type": "llm",
+                "name": "LLM",
+                "position": {"x": 1, "y": 0},
+                "config": {"prompt": "{{ message }}", "output_key": "answer"},
+            },
+            "out": {
+                "id": "out",
+                "type": "output",
+                "name": "Output",
+                "position": {"x": 2, "y": 0},
+                "config": {"path": "answer"},
+            },
+        },
+        "edges": [
+            {"id": "e1", "source": "input", "target": "llm", "sourceHandle": None},
+            {"id": "e2", "source": "llm", "target": "out", "sourceHandle": None},
+        ],
+    }
+
+
+def _echo_runtime(response: str = "model answer", **kwargs) -> LangGraphRuntime:
+    return LangGraphRuntime(
+        model="test-model",
+        api_key="test-key",
+        base_url="http://example.test/v1",
+        model_factory=lambda **_: _EchoModel(response),
+        **kwargs,
+    )
+
+
+def test_agent_settings_are_normalized_and_clamped() -> None:
+    settings = normalize_agent_settings(
+        {
+            "model": " openrouter/auto ",
+            "temperature": 5,
+            "max_tokens": 0,
+            "context_window_tokens": 100,
+            "guardrail_input": "pii",
+            "guardrail_output": "nope",
+            "deny_terms": [" secret ", "", 3],
+            "knowledge_base_ids": ["kb1", "", 4],
+            "rag_top_k": 99,
+            "rag_min_score": 2,
+            "unknown": "dropped",
+        }
+    )
+    assert settings["model"] == "openrouter/auto"
+    assert settings["temperature"] == 2.0
+    assert settings["max_tokens"] == 1
+    assert settings["context_window_tokens"] == 512
+    assert settings["guardrail_input"] == "pii"
+    assert "guardrail_output" not in settings
+    assert settings["deny_terms"] == ["secret"]
+    assert settings["knowledge_base_ids"] == ["kb1"]
+    assert settings["rag_top_k"] == 20
+    assert settings["rag_min_score"] == 1.0
+    assert "unknown" not in settings
+
+
+def test_agent_input_guardrail_blocks_before_the_model() -> None:
+    runtime = _echo_runtime(agent_settings={"guardrail_input": "pii"})
+    with pytest.raises(GraphRuntimeError) as exc:
+        runtime.run(_single_llm_graph(), {"message": "email me at a@b.com"})
+    assert "input guardrail" in str(exc.value)
+    assert exc.value.steps and exc.value.steps[0]["scope"] == "input"
+
+
+def test_agent_output_guardrail_blocks_unsafe_markup() -> None:
+    runtime = _echo_runtime(
+        "<script>alert(1)</script>", agent_settings={"guardrail_output": "safe_text"}
+    )
+    with pytest.raises(GraphRuntimeError) as exc:
+        runtime.run(_single_llm_graph(), {"message": "hello"})
+    assert "output guardrail" in str(exc.value)
+    assert any(step.get("scope") == "output" for step in exc.value.steps)
+
+
+def test_agent_rag_injects_context_and_records_the_retrieval() -> None:
+    calls: list[tuple[str, str, int]] = []
+
+    def retrieval(kb_id, query, top_k, min_score):
+        calls.append((kb_id, query, top_k))
+        return {
+            "results": [
+                {"document_name": "policy", "content": "Only five slots.", "score": 0.9}
+            ]
+        }
+
+    runtime = _echo_runtime(
+        retrieval=retrieval,
+        agent_settings={
+            "knowledge_base_ids": ["kb-1"],
+            "rag_top_k": 2,
+            "rag_min_score": 0.1,
+        },
+    )
+    result = runtime.run(_single_llm_graph(), {"message": "how many slots?"})
+    assert calls == [("kb-1", "how many slots?", 2)]
+    retrieval_steps = [step for step in result.steps if step["type"] == "retrieval"]
+    assert retrieval_steps and retrieval_steps[0]["chunks"] == 1
+    assert result.output["message"] == "model answer"
